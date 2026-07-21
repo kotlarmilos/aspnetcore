@@ -5650,6 +5650,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         MountQuickGridForScrollToItem(useItemsProvider: useItemsProvider, variableHeight: false);
         var js = (IJavaScriptExecutor)Browser;
 
+        Browser.Exists(By.Id("set-tall-container")).Click();
         Browser.Exists(By.Id("unload-list")).Click();
         Browser.Exists(By.Id("list-not-loaded"));
         js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");

@@ -15,7 +15,7 @@
     .qg-scroll-cell .item { box-sizing: border-box; }
 </style>
 
-<div id="scroll-container" style="height: 300px; overflow-y: auto; border: 1px solid black;">
+<div id="scroll-container" style="height: @(containerHeight); overflow-y: auto; border: 1px solid black;">
     @if (listLoaded)
     {
         @if (useItemsProvider)
@@ -49,6 +49,7 @@
     </label>
     <button id="reload-with-initial-index" @onclick="ReloadWithInitialIndex">Load list with Initial Index</button>
     <button id="unload-list" @onclick="UnloadList">Unload list</button>
+    <button id="set-tall-container" @onclick="SetTallContainer">Tall container</button>
     <span id="manual-initial-index-bound" data-value="@manualInitialIndex" style="margin-left: 8px; color:#888;">bound:@manualInitialIndex</span>
 </div>
 
@@ -99,6 +100,7 @@
     private bool listLoaded = true;
     private int scrollTargetIndex = 200;
     private string scrollStatus = "Idle";
+    private string containerHeight = "300px";
 #nullable enable
     private CancellationTokenSource? _userScrollCts;
 #nullable restore
@@ -163,6 +165,8 @@
     }
 
     private void UnloadList() => listLoaded = false;
+
+    private void SetTallContainer() => containerHeight = "800px";
 
     private async Task ScrollToTarget()
     {
