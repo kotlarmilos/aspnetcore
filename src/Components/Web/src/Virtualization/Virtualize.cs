@@ -64,6 +64,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
     private bool _initialScrollApplied;
 
+    private bool _hasSpacerFeedback;
+
     private bool _skipNextDistributionRefresh;
 
     private Exception? _refreshException;
@@ -302,8 +304,11 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     private bool MoveWindowToContain(int itemIndex)
     {
         var clamped = ClampToItemRange(itemIndex);
+        var measured = _hasSpacerFeedback;
         var capacity = _visibleItemCapacity > 0 ? _visibleItemCapacity : OverscanCount * 2 + 1;
-        var desiredItemsBefore = Math.Max(0, clamped - OverscanCount);
+
+        var leadingOverscan = measured ? OverscanCount : 0;
+        var desiredItemsBefore = Math.Max(0, clamped - leadingOverscan);
         if (_itemCount > 0 && desiredItemsBefore + capacity > _itemCount)
         {
             desiredItemsBefore = Math.Max(0, _itemCount - capacity);
@@ -663,6 +668,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             return;
         }
 
+        _hasSpacerFeedback = true;
+
         ProcessMeasurements(spacerSeparation);
 
         CalculateItemDistribution(spacerSize, spacerSeparation, containerSize, out var itemsBefore, out var visibleItemCapacity, out var unusedItemCapacity);
@@ -682,6 +689,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         {
             return;
         }
+
+        _hasSpacerFeedback = true;
 
         var hadNewMeasurements = ProcessMeasurements(spacerSeparation);
 

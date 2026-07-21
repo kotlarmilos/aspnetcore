@@ -5098,6 +5098,29 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         ");
     }
 
+    // Returns the data-index of the bottom-most REAL item that intersects the viewport, or -1 if the
+    // element covering the viewport bottom is a placeholder / missing (i.e. the window underfills).
+    private long GetBottomRenderedIndex(IJavaScriptExecutor js)
+    {
+        return (long)js.ExecuteScript(@"
+            var container = document.getElementById('scroll-container');
+            var rect = container.getBoundingClientRect();
+            var items = container.querySelectorAll('.item, .loading-placeholder');
+            var best = null;
+            var bestBottom = Number.NEGATIVE_INFINITY;
+            for (var i = 0; i < items.length; i++) {
+                var ir = items[i].getBoundingClientRect();
+                if (ir.top >= rect.bottom - 1) continue; // below viewport
+                if (ir.bottom <= rect.top + 1) continue; // above viewport
+                if (ir.bottom > bestBottom) { bestBottom = ir.bottom; best = items[i]; }
+            }
+            if (!best) return -1;
+            if (best.classList.contains('loading-placeholder')) return -1;
+            var idx = best.getAttribute('data-index');
+            return idx === null ? -1 : parseInt(idx, 10);
+        ");
+    }
+
     private long GetScrollTop(IJavaScriptExecutor js, IWebElement container)
         => (long)js.ExecuteScript("return Math.round(arguments[0].scrollTop)", container);
 
@@ -5599,6 +5622,32 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         Browser.Exists(By.Id("reload-with-initial-index")).Click();
 
         Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+    }
+
+    // Repro for the InitialItemIndex viewport-underfill bug: a small initial index seeds a minimal
+    // item window (OverscanCount*2+1), so after the target lands at the viewport top only a few rows
+    // render below it, leaving a gap that doesn't fill until the user scrolls. The container is 300px
+    // tall with fixed 50px rows (6 visible rows), so InitialItemIndex=10 must render through item 15.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void QuickGrid_InitialIndex_FillsViewport(bool useItemsProvider)
+    {
+        const int initialIndex = 10;
+        const int expectedVisibleRows = 6; // 300px container / 50px rows
+        MountQuickGridForScrollToItem(useItemsProvider: useItemsProvider, variableHeight: false);
+        var js = (IJavaScriptExecutor)Browser;
+
+        Browser.Exists(By.Id("unload-list")).Click();
+        Browser.Exists(By.Id("list-not-loaded"));
+        js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");
+        SetManualInitialIndex(initialIndex);
+        Browser.Exists(By.Id("reload-with-initial-index")).Click();
+
+        Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+        Browser.True(() => GetBottomRenderedIndex(js) >= initialIndex + expectedVisibleRows - 1,
+            $"Viewport should be fully covered through item {initialIndex + expectedVisibleRows - 1}, " +
+            $"but bottom rendered item was {GetBottomRenderedIndex(js)} (top={GetTopRenderedIndex(js)}).");
     }
 
     [Theory]
