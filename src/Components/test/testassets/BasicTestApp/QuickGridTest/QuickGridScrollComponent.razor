@@ -23,7 +23,7 @@
             <QuickGrid @ref="providerGrid" ItemsProvider="@itemsProvider" Virtualize="true" ItemSize="50"
                        InitialItemIndex="@initialItemIndex">
                 <TemplateColumn Title="Item" Class="qg-scroll-cell">
-                    <div class="item" data-index="@context.Index" style="min-height: @(context.Height)px; line-height: @(context.Height)px;">Item @context.Index</div>
+                    <div class="item" data-index="@context.Index" style="min-height: @(context.Height)px; line-height: @(context.Height)px; border: 1px solid gray; box-sizing: border-box;">Item @context.Index</div>
                 </TemplateColumn>
             </QuickGrid>
         }
@@ -32,7 +32,7 @@
             <QuickGrid @ref="itemsGrid" Items="@rows.AsQueryable()" Virtualize="true" ItemSize="50"
                        InitialItemIndex="@initialItemIndex">
                 <TemplateColumn Title="Item" Class="qg-scroll-cell">
-                    <div class="item" data-index="@context.Index" style="min-height: @(context.Height)px; line-height: @(context.Height)px;">Item @context.Index</div>
+                    <div class="item" data-index="@context.Index" style="min-height: @(context.Height)px; line-height: @(context.Height)px; border: 1px solid gray; box-sizing: border-box;">Item @context.Index</div>
                 </TemplateColumn>
             </QuickGrid>
         }

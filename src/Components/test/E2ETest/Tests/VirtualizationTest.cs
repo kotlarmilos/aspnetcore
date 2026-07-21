@@ -5124,6 +5124,23 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     private long GetScrollTop(IJavaScriptExecutor js, IWebElement container)
         => (long)js.ExecuteScript("return Math.round(arguments[0].scrollTop)", container);
 
+    private bool ViewportBottomCoveredByRealItem(IJavaScriptExecutor js)
+    {
+        return (bool)js.ExecuteScript(@"
+            var c = document.getElementById('scroll-container');
+            var rect = c.getBoundingClientRect();
+            var items = c.querySelectorAll('.item');
+            var maxBottom = Number.NEGATIVE_INFINITY;
+            for (var i = 0; i < items.length; i++) {
+                var r = items[i].getBoundingClientRect();
+                if (r.bottom <= rect.top + 1) continue; // above viewport
+                if (r.top >= rect.bottom - 1) continue;  // below viewport
+                if (r.bottom > maxBottom) maxBottom = r.bottom;
+            }
+            return maxBottom >= rect.bottom - 2;
+        ");
+    }
+
     [Fact]
     public void ScrollToItem_FixedHeight_LandsAtTop()
     {
@@ -5624,17 +5641,12 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
     }
 
-    // Repro for the InitialItemIndex viewport-underfill bug: a small initial index seeds a minimal
-    // item window (OverscanCount*2+1), so after the target lands at the viewport top only a few rows
-    // render below it, leaving a gap that doesn't fill until the user scrolls. The container is 300px
-    // tall with fixed 50px rows (6 visible rows), so InitialItemIndex=10 must render through item 15.
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void QuickGrid_InitialIndex_FillsViewport(bool useItemsProvider)
     {
         const int initialIndex = 10;
-        const int expectedVisibleRows = 6; // 300px container / 50px rows
         MountQuickGridForScrollToItem(useItemsProvider: useItemsProvider, variableHeight: false);
         var js = (IJavaScriptExecutor)Browser;
 
@@ -5645,9 +5657,38 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         Browser.Exists(By.Id("reload-with-initial-index")).Click();
 
         Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
-        Browser.True(() => GetBottomRenderedIndex(js) >= initialIndex + expectedVisibleRows - 1,
-            $"Viewport should be fully covered through item {initialIndex + expectedVisibleRows - 1}, " +
-            $"but bottom rendered item was {GetBottomRenderedIndex(js)} (top={GetTopRenderedIndex(js)}).");
+        Browser.True(() => ViewportBottomCoveredByRealItem(js),
+            $"Viewport bottom should be covered by a real item, but a gap/placeholder was found " +
+            $"(top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Virtualize_InitialIndex_FillsViewport(bool useItemsProvider)
+    {
+        const int initialIndex = 10;
+        Browser.MountTestComponent<VirtualizationAnchorMode>();
+        var container = Browser.Exists(By.Id("scroll-container"));
+        Browser.True(() => GetElementCount(container, ".item") > 0);
+        if (useItemsProvider)
+        {
+            Browser.Exists(By.Id("toggle-provider")).Click();
+            Browser.True(() => GetElementCount(container, ".item") > 0);
+        }
+        Browser.Exists(By.Id("set-small-overscan")).Click();
+        var js = (IJavaScriptExecutor)Browser;
+
+        Browser.Exists(By.Id("unload-list")).Click();
+        Browser.Exists(By.Id("list-not-loaded"));
+        js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");
+        SetManualInitialIndex(initialIndex);
+        Browser.Exists(By.Id("reload-with-initial-index")).Click();
+
+        Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+        Browser.True(() => ViewportBottomCoveredByRealItem(js),
+            $"Viewport bottom should be covered by a real item, but a gap/placeholder was found " +
+            $"(top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
     }
 
     [Theory]

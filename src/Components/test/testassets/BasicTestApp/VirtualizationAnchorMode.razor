@@ -85,6 +85,7 @@
     <button id="expand-item" @onclick="ExpandVisibleItem">Expand Item 3 to 400px</button>
     <button id="set-small-count" @onclick="SetSmallCount">Set 5 Items</button>
     <button id="set-console-scenario" @onclick="SetConsoleScenario">Console scenario (40 items, overscan 100)</button>
+    <button id="set-small-overscan" @onclick="SetSmallOverscan">Set overscan 2</button>
     <button id="toggle-provider" @onclick="ToggleProvider">
         Source: @(useItemsProvider ? "ItemsProvider" : "Items")
     </button>
@@ -282,6 +283,13 @@
         nextPrependIndex = -1;
         nextAppendIndex = 40;
         statusMessage = "Console scenario: 40 items, overscan 100";
+        if (useItemsProvider && virtualizeRef != null) { await virtualizeRef.RefreshDataAsync(); }
+    }
+
+    private async Task SetSmallOverscan()
+    {
+        overscanCount = 2;
+        statusMessage = "Overscan set to 2";
         if (useItemsProvider && virtualizeRef != null) { await virtualizeRef.RefreshDataAsync(); }
     }
 
