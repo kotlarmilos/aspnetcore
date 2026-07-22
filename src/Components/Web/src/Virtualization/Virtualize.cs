@@ -690,8 +690,11 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
         if (fillAfterScroll)
         {
-            _skipNextDistributionRefresh = false;
-            UpdateItemDistribution(_itemsBefore, visibleItemCapacity, unusedItemCapacity);
+            if (_itemsBefore + visibleItemCapacity < _itemCount)
+            {
+                _skipNextDistributionRefresh = false;
+                UpdateItemDistribution(_itemsBefore, visibleItemCapacity, unusedItemCapacity);
+            }
             return;
         }
 
