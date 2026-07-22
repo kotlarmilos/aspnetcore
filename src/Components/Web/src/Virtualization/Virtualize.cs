@@ -64,6 +64,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
     private bool _hasSpacerFeedback;
 
+    private bool _fillViewportAfterScroll;
+
     private bool _skipNextDistributionRefresh;
 
     private Exception? _refreshException;
@@ -251,10 +253,10 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
                 $"Use the {nameof(InitialItemIndex)} parameter to set the initial scroll position.");
         }
 
-        return ScrollToItemAsyncCore(itemIndex, cancellationToken);
+        return ScrollToItemAsyncCore(itemIndex, fillViewportAfterScroll: false, cancellationToken);
     }
 
-    private async Task ScrollToItemAsyncCore(int itemIndex, CancellationToken cancellationToken)
+    private async Task ScrollToItemAsyncCore(int itemIndex, bool fillViewportAfterScroll, CancellationToken cancellationToken)
     {
         // Cancel-and-switch (last call wins); finally block guards cleanup by ref-equality.
         _currentScrollCts?.Cancel();
@@ -262,6 +264,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         var ourCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _currentScrollCts = ourCts;
         _inFlightScrollHasRendered = false;
+        _fillViewportAfterScroll = false;
         var token = ourCts.Token;
 
         // Suppress JS spacer-IO callbacks until alignToItem completes or a real user scrolls.
@@ -280,7 +283,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             token.ThrowIfCancellationRequested();
             var refetchRequired = MoveWindowToContain(itemIndex);
             await EnsureRenderCommittedAsync(refetchRequired, token);
-            await AlignToTargetAsync(itemIndex, token);
+            await AlignToTargetAsync(itemIndex, fillViewportAfterScroll, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -349,7 +352,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         token.ThrowIfCancellationRequested();
     }
 
-    private async ValueTask AlignToTargetAsync(int itemIndex, CancellationToken token)
+    private async ValueTask AlignToTargetAsync(int itemIndex, bool fillViewportAfterScroll, CancellationToken token)
     {
         // Re-clamp in case _itemCount shifted during the fetch.
         var localIndex = ClampToItemRange(itemIndex) - _itemsBefore;
@@ -362,6 +365,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // Pixel-exact one-shot scroll: JS reads getBoundingClientRect() and sets scrollTop.
         if (_jsInterop is not null)
         {
+            _fillViewportAfterScroll = fillViewportAfterScroll;
             await _jsInterop.AlignToItemAsync(localIndex, token);
         }
     }
@@ -514,7 +518,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             if (InitialItemIndex > 0)
             {
                 _initialScrollApplied = true;
-                await ScrollToItemAsync(InitialItemIndex);
+                await ScrollToItemAsyncCore(InitialItemIndex, fillViewportAfterScroll: true, CancellationToken.None);
             }
             else if (_itemCount > 0)
             {
@@ -664,13 +668,16 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // programmatic scroll and the in-flight provider call so the user's window wins.
         _currentScrollCts.Cancel();
         _currentScrollCts = null;
+        _fillViewportAfterScroll = false;
         _refreshCts?.Cancel();
         return false;
     }
 
     void IVirtualizeJsCallbacks.OnBeforeSpacerVisible(float spacerSize, float spacerSeparation, float containerSize)
     {
-        if (_pendingAnchorRestore || ShouldSuppressSpacerCallback())
+        var fillAfterScroll = _fillViewportAfterScroll;
+        _fillViewportAfterScroll = false;
+        if (_pendingAnchorRestore || (!fillAfterScroll && ShouldSuppressSpacerCallback()))
         {
             return;
         }
@@ -680,6 +687,13 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         ProcessMeasurements(spacerSeparation);
 
         CalculateItemDistribution(spacerSize, spacerSeparation, containerSize, out var itemsBefore, out var visibleItemCapacity, out var unusedItemCapacity);
+
+        if (fillAfterScroll)
+        {
+            _skipNextDistributionRefresh = false;
+            UpdateItemDistribution(_itemsBefore, visibleItemCapacity, unusedItemCapacity);
+            return;
+        }
 
         // Slide window up by at least one if spacer is visible but position unchanged.
         if (_lastRenderedItemCount > 0 && itemsBefore == _itemsBefore && itemsBefore > 0)

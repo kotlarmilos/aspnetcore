@@ -521,6 +521,29 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
     return el.getBoundingClientRect().top - containerTop;
   }
 
+  function dispatchBeforeSpacerFill(): void {
+    if (!spacerBefore.isConnected || !spacerAfter.isConnected) {
+      return;
+    }
+    flushPendingStyleMutations();
+    const scaleFactor = getScaleFactor(spacerBefore, spacerAfter);
+
+    rangeBetweenSpacers.setStartAfter(spacerBefore);
+    rangeBetweenSpacers.setEndBefore(spacerAfter);
+    const spacerSeparation = rangeBetweenSpacers.getBoundingClientRect().height / scaleFactor;
+
+    const containerSize = (scrollElement.clientHeight + 2 * rootMargin) / scaleFactor;
+
+    const viewportTop = scrollElement === document.documentElement
+      ? 0
+      : scrollElement.getBoundingClientRect().top;
+    const beforeRect = spacerBefore.getBoundingClientRect();
+    const spacerSize = Math.max(0, Math.min(beforeRect.bottom, viewportTop) - beforeRect.top) / scaleFactor;
+
+    scrollTriggeredRender = true;
+    dotNetHelper.invokeMethodAsync('OnSpacerBeforeVisible', spacerSize, spacerSeparation, containerSize);
+  }
+
   // Measures the target's viewport-relative top and aligns it to containerTop.
   function alignToItemAt(localIndex: number): void {
     // Target row should be measured against the committed window, not a stale spacer height.
@@ -553,6 +576,8 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
       pendingJumpToStart = false;
       pendingJumpToEnd = false;
       scrollElement.scrollTo({ top: scrollElement.scrollTop + delta, behavior: 'instant' });
+
+      dispatchBeforeSpacerFill();
     }
   }
 
