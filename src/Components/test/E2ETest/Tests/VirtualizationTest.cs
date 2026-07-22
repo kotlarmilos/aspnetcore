@@ -1347,7 +1347,11 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         Browser.Equal("Total: 1001", () => totalItemCount.Text);
 
         refreshButton.Click();
-        finishLoadingButton.Click();
+        Browser.True(() =>
+        {
+            finishLoadingButton.Click();
+            return container.FindElements(By.Id("async-variable-item-0")).Count > 0;
+        }, TimeSpan.FromSeconds(5), "New item-0 should render at top after prepend");
 
         firstItem = container.FindElement(By.Id("async-variable-item-0"));
         Assert.Contains("height: 100px", firstItem.GetDomAttribute("style"));
@@ -1992,10 +1996,9 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [InlineData("0", false)]
     [InlineData("1", false)]
     [InlineData("2", false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865:
-    // [InlineData("0", true)]
-    // [InlineData("1", true)]
-    // [InlineData("2", true)]
+    [InlineData("0", true)]
+    [InlineData("1", true)]
+    [InlineData("2", true)]
     public void QuickGrid_AnchorMode_NearTop_PrependKeepsViewportStable(string anchorMode, bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent(anchorMode, useItemsProvider);
@@ -2121,10 +2124,9 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [InlineData("0", false)]
     [InlineData("1", false)]
     [InlineData("2", false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865:
-    // [InlineData("0", true)]
-    // [InlineData("1", true)]
-    // [InlineData("2", true)]
+    [InlineData("0", true)]
+    [InlineData("1", true)]
+    [InlineData("2", true)]
     public void QuickGrid_AnchorMode_Bottom_PrependKeepsViewportStable(string anchorMode, bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent(anchorMode, useItemsProvider);
@@ -2154,8 +2156,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
 
     [Theory]
     [InlineData(false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865:
-    // [InlineData(true)]
+    [InlineData(true)]
     public void QuickGrid_AnchorMode_None_PrependAtTop_ViewportStaysStable(bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent("0", useItemsProvider);
@@ -2215,8 +2216,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
 
     [Theory]
     [InlineData(false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865 (provider async-anchor race; Items false is 0/5 across runs):
-    // [InlineData(true)]
+    [InlineData(true)]
     public void QuickGrid_AnchorMode_End_PrependAtTop_ViewportStaysStable(bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent("2", useItemsProvider);
@@ -2245,7 +2245,6 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     }
 
     [Fact]
-    [QuarantinedTest("https://github.com/dotnet/aspnetcore/issues/67865")] // fails pre-fix
     public void QuickGrid_AnchorMode_None_AsyncProvider_PrependKeepsViewportStable()
     {
         MountQuickGridAnchorModeComponent("0", useItemsProvider: true);
@@ -2456,8 +2455,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
 
     [Theory]
     [InlineData(false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865 (provider async-anchor race: index jumps 90->80):
-    // [InlineData(true)]
+    [InlineData(true)]
     public void QuickGrid_AnchorMode_None_MidList_ViewportStable(bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent("0", useItemsProvider);
@@ -2487,8 +2485,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
 
     [Theory]
     [InlineData(false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865 (provider async-anchor race: index jumps 90->80):
-    // [InlineData(true)]
+    [InlineData(true)]
     public void QuickGrid_AnchorMode_Start_MidList_ViewportStable(bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent("1", useItemsProvider);
@@ -2518,8 +2515,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
 
     [Theory]
     [InlineData(false)]
-    // Disabled pending fix https://github.com/dotnet/aspnetcore/issues/67865 (provider async-anchor race: index jumps 90->80):
-    // [InlineData(true)]
+    [InlineData(true)]
     public void QuickGrid_AnchorMode_End_MidList_ViewportStable(bool useItemsProvider)
     {
         MountQuickGridAnchorModeComponent("2", useItemsProvider);
@@ -2869,11 +2865,17 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
             $"Large jumps indicate CSS scroll anchoring is miscalculating on <tr> elements.");
     }
 
-    private void MountAnchorModeComponent(string anchorMode, bool variableHeight = false, bool useItemsProvider = false)
+    private void MountAnchorModeComponent(string anchorMode, bool variableHeight = false, bool useItemsProvider = false, bool useDefaultComparer = false)
     {
         Browser.MountTestComponent<VirtualizationAnchorMode>();
         var container = Browser.Exists(By.Id("scroll-container"));
         Browser.True(() => GetElementCount(container, ".item") > 0);
+
+        if (useDefaultComparer)
+        {
+            Browser.Exists(By.Id("toggle-comparer")).Click();
+            Browser.True(() => GetElementCount(container, ".item") > 0);
+        }
 
         if (useItemsProvider)
         {
@@ -3125,9 +3127,11 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [InlineData("0", true)]
     [InlineData("1", true)]
     [InlineData("2", true)]
-    public void AnchorMode_NearTop_PrependKeepsViewportStable(string anchorMode, bool useItemsProvider)
+    [InlineData("0", true, true)]
+    [InlineData("1", true, true)]
+    public void AnchorMode_NearTop_PrependKeepsViewportStable(string anchorMode, bool useItemsProvider, bool useDefaultComparer = false)
     {
-        MountAnchorModeComponent(anchorMode, useItemsProvider: useItemsProvider);
+        MountAnchorModeComponent(anchorMode, useItemsProvider: useItemsProvider, useDefaultComparer: useDefaultComparer);
 
         var container = Browser.Exists(By.Id("scroll-container"));
         var js = (IJavaScriptExecutor)Browser;
@@ -3146,7 +3150,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
             ".item",
             indexBefore,
             relTopBefore,
-            $"AnchorMode {anchorMode} near top: viewport should stay stable after prepend",
+            $"AnchorMode {anchorMode} near top (defaultComparer={useDefaultComparer}): viewport should stay stable after prepend",
             driftTolerance: 2);
     }
 
@@ -3248,9 +3252,11 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [InlineData("1", false)]
     [InlineData("0", true)]
     [InlineData("1", true)]
-    public void AnchorMode_MidList_AppendKeepsViewportStable(string anchorMode, bool useItemsProvider)
+    [InlineData("0", true, true)]
+    [InlineData("1", true, true)]
+    public void AnchorMode_MidList_AppendKeepsViewportStable(string anchorMode, bool useItemsProvider, bool useDefaultComparer = false)
     {
-        MountAnchorModeComponent(anchorMode, useItemsProvider: useItemsProvider);
+        MountAnchorModeComponent(anchorMode, useItemsProvider: useItemsProvider, useDefaultComparer: useDefaultComparer);
 
         var container = Browser.Exists(By.Id("scroll-container"));
         var js = (IJavaScriptExecutor)Browser;
@@ -3269,7 +3275,7 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
             ".item",
             indexBefore,
             relTopBefore,
-            $"AnchorMode {anchorMode} mid-list: viewport should stay stable after append",
+            $"AnchorMode {anchorMode} mid-list (defaultComparer={useDefaultComparer}): viewport should stay stable after append",
             driftTolerance: 2);
     }
     [Theory]
