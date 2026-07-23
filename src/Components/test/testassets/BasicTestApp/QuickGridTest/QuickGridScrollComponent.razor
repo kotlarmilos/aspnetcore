@@ -50,6 +50,7 @@
     <button id="reload-with-initial-index" @onclick="ReloadWithInitialIndex">Load list with Initial Index</button>
     <button id="unload-list" @onclick="UnloadList">Unload list</button>
     <button id="set-tall-container" @onclick="SetTallContainer">Tall container</button>
+    <button id="set-cliff-heights" @onclick="SetCliffHeights">Cliff heights</button>
     <span id="manual-initial-index-bound" data-value="@manualInitialIndex" style="margin-left: 8px; color:#888;">bound:@manualInitialIndex</span>
 </div>
 
@@ -88,6 +89,7 @@
     private List<Row> rows = new();
     private string statusMessage = "Ready";
     private bool useVariableHeight;
+    private bool useCliffHeights;
     private bool useItemsProvider;
     private bool useProviderDelay;
 
@@ -116,7 +118,27 @@
     }
 
     private int GetHeight(int index)
-        => useVariableHeight ? 10 + (Math.Abs(index * 7 + 13) % 191) : 50;
+    {
+        if (useCliffHeights)
+        {
+            // Two tall rows at a fixed band, every other row short. Opening at the band start puts the
+            // tall rows in the measured seed (inflating the estimated item size, so the computed
+            // visible-item capacity is small) while the rows that fill the viewport below are short.
+            return index is 500 or 501 ? 190 : 22;
+        }
+
+        return useVariableHeight ? 10 + (Math.Abs(index * 7 + 13) % 191) : 50;
+    }
+
+    private void SetCliffHeights()
+    {
+        useCliffHeights = true;
+        foreach (var row in rows)
+        {
+            row.Height = GetHeight(row.Index);
+        }
+        statusMessage = "Switched to cliff heights";
+    }
 
     private void ToggleVariableHeight()
     {

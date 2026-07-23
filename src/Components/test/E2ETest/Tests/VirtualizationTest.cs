@@ -5800,6 +5800,30 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void QuickGrid_InitialIndex_FillsViewport_WithTallSeedShortBody(bool useItemsProvider)
+    {
+        const int initialIndex = 500;
+        MountQuickGridForScrollToItem(useItemsProvider: useItemsProvider, variableHeight: false);
+        var js = (IJavaScriptExecutor)Browser;
+
+        Browser.Exists(By.Id("set-cliff-heights")).Click();
+        Browser.True(() => GetElementCount(Browser.Exists(By.Id("scroll-container")), ".item") > 0);
+        Browser.Exists(By.Id("set-tall-container")).Click();
+        Browser.Exists(By.Id("unload-list")).Click();
+        Browser.Exists(By.Id("list-not-loaded"));
+        js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");
+        SetManualInitialIndex(initialIndex);
+        Browser.Exists(By.Id("reload-with-initial-index")).Click();
+
+        Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+        Browser.True(() => ViewportBottomCoveredByRealItem(js),
+            $"Viewport bottom should be covered by a real item, but a gap/placeholder was found " +
+            $"(top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void Virtualize_InitialIndex_FillsViewport(bool useItemsProvider)
     {
         const int initialIndex = 10;
