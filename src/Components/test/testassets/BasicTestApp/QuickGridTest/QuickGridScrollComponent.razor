@@ -73,8 +73,9 @@
         Heights: @(useVariableHeight ? "Variable (10-200px)" : "Fixed (50px)")
     </button>
     <button id="toggle-delay" @onclick="ToggleDelay">
-        Provider Delay: @(useProviderDelay ? "150ms" : "None")
+        Provider Delay: @(useProviderDelay ? $"{providerDelayMs}ms" : "None")
     </button>
+    <button id="set-long-delay" @onclick="SetLongDelay">Long delay</button>
 </div>
 
 <p id="status">@statusMessage</p>
@@ -92,6 +93,7 @@
     private bool useCliffHeights;
     private bool useItemsProvider;
     private bool useProviderDelay;
+    private int providerDelayMs = 150;
 
     private QuickGrid<Row> providerGrid = default!;
     private QuickGrid<Row> itemsGrid = default!;
@@ -159,7 +161,15 @@
     private void ToggleDelay()
     {
         useProviderDelay = !useProviderDelay;
-        statusMessage = useProviderDelay ? "Provider delay: 150ms" : "Provider delay: None";
+        statusMessage = useProviderDelay ? $"Provider delay: {providerDelayMs}ms" : "Provider delay: None";
+    }
+
+    // Widens the post-align viewport-fill window so tests can reliably interrupt it with a scroll.
+    private void SetLongDelay()
+    {
+        providerDelayMs = 600;
+        useProviderDelay = true;
+        statusMessage = $"Provider delay: {providerDelayMs}ms";
     }
 
     private async ValueTask<GridItemsProviderResult<Row>> GetItemsAsync(GridItemsProviderRequest<Row> request)
@@ -167,7 +177,7 @@
         await Task.Yield();
         if (useProviderDelay)
         {
-            await Task.Delay(150);
+            await Task.Delay(providerDelayMs);
         }
 
         var count = request.Count ?? rows.Count;

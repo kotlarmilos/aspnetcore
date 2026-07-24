@@ -679,6 +679,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
         if (_currentScrollCts is null)
         {
+            _fillViewportContinue = false;
+            _fillViewportAfterScroll = false;
             return false;
         }
         if (_inFlightScrollHasRendered)

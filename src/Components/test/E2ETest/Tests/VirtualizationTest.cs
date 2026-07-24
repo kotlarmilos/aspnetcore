@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Components.E2ETest.Infrastructure.ServerFixtures;
 using Microsoft.AspNetCore.E2ETesting;
 using Microsoft.AspNetCore.InternalTesting;
 using OpenQA.Selenium;
+using OpenQA.Selenium.Interactions;
 using OpenQA.Selenium.Support.Extensions;
 using OpenQA.Selenium.Support.UI;
 using Xunit.Abstractions;
@@ -5819,6 +5820,63 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
         Browser.True(() => ViewportBottomCoveredByRealItem(js),
             $"Viewport bottom should be covered by a real item, but a gap/placeholder was found " +
             $"(top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
+    }
+
+    [Fact]
+    public void QuickGrid_InitialIndex_UserScrollDuringViewportFill_LetsUserWin()
+    {
+        const int initialIndex = 500;
+        MountQuickGridForScrollToItem(useItemsProvider: true, variableHeight: false);
+        var container = Browser.Exists(By.Id("scroll-container"));
+        var js = (IJavaScriptExecutor)Browser;
+
+        Browser.Exists(By.Id("set-cliff-heights")).Click();
+        Browser.True(() => GetElementCount(container, ".item") > 0);
+        Browser.Exists(By.Id("set-tall-container")).Click();
+        // A long provider delay stretches each fill iteration so a single real user scroll can
+        // reliably land while the loop is still running (rather than racing a ~450ms window).
+        Browser.Exists(By.Id("set-long-delay")).Click();
+        Browser.Exists(By.Id("unload-list")).Click();
+        Browser.Exists(By.Id("list-not-loaded"));
+        js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");
+        SetManualInitialIndex(initialIndex);
+        Browser.Exists(By.Id("reload-with-initial-index")).Click();
+
+        // Wait for the initial ScrollToItem to fully complete: the target row (index 500) rendered
+        // as a real item at the top. Only then does the post-align viewport-fill loop drive the
+        // remaining iterations, which is the window this test interrupts. (Reacting earlier would
+        // race the initial programmatic scroll, whose IO callbacks are suppressed by design.)
+        Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+
+        // While the loop is still filling (bottom not yet covered), the user scrolls up hard with a
+        // real wheel.
+        var scrollOrigin = new WheelInputDevice.ScrollOrigin { Element = container };
+        new Actions(Browser).ScrollFromOrigin(scrollOrigin, 0, -8000).Perform();
+
+        // Capture where the user's scroll left the viewport, then watch it for ~1.5s. A healthy
+        // viewport stays put; the buggy fill loop keeps re-pinning the original target and drags
+        // the viewport away over its remaining iterations.
+        var posAfterWheel = GetScrollTop(js, container);
+        var samples = (IReadOnlyList<object>)js.ExecuteAsyncScript(@"
+            var done = arguments[arguments.length - 1];
+            var c = document.getElementById('scroll-container');
+            var mid = null;
+            var t0 = performance.now();
+            var iv = setInterval(function () {
+                var dt = performance.now() - t0;
+                if (mid === null && dt >= 400) { mid = Math.round(c.scrollTop); }
+                if (dt > 2000) { clearInterval(iv); done([mid, Math.round(c.scrollTop)]); }
+            }, 25);
+        ");
+        var midTop = Convert.ToInt64(samples[0], CultureInfo.InvariantCulture);
+        var finalTop = Convert.ToInt64(samples[1], CultureInfo.InvariantCulture);
+
+        // The viewport must not drift on its own after the user scroll: it should stay where the
+        // user's wheel left it (the fill loop must abandon instead of fighting the scroll).
+        Assert.True(Math.Abs(finalTop - posAfterWheel) <= 200 && Math.Abs(finalTop - midTop) <= 200,
+            $"After a user scroll during the viewport-fill loop, the viewport should stay where the " +
+            $"user scrolled (~{posAfterWheel}px) but drifted (mid={midTop}, final={finalTop}) because " +
+            $"the fill loop re-pinned the original target and fought the user scroll.");
     }
 
     [Theory]
