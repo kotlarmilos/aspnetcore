@@ -161,7 +161,7 @@
     private void ToggleDelay()
     {
         useProviderDelay = !useProviderDelay;
-        statusMessage = useProviderDelay ? $"Provider delay: {providerDelayMs}ms" : "Provider delay: None";
+        statusMessage = useProviderDelay ? $"Provider delay for QuickGrid: {providerDelayMs}ms" : "Provider delay for QuickGrid: None";
     }
 
     // Widens the post-align viewport-fill window so tests can reliably interrupt it with a scroll.
@@ -169,7 +169,7 @@
     {
         providerDelayMs = 600;
         useProviderDelay = true;
-        statusMessage = $"Provider delay: {providerDelayMs}ms";
+        statusMessage = $"Provider delay for QuickGrid: {providerDelayMs}ms";
     }
 
     private async ValueTask<GridItemsProviderResult<Row>> GetItemsAsync(GridItemsProviderRequest<Row> request)
