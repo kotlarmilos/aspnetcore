@@ -102,6 +102,7 @@
         Gate: @(useProviderGate ? "On" : "Off")
     </button>
     <button id="release-provider-gate" @onclick="ReleaseProviderGate">Release gate</button>
+    <button id="set-container-900" @onclick="SetContainerTall">Container 900px</button>
 </div>
 
 <p id="status">@statusMessage</p>
@@ -304,6 +305,13 @@
         overscanCount = 1;
         containerHeight = "900px";
         statusMessage = "Overscan set to 1";
+        if (useItemsProvider && virtualizeRef != null) { await virtualizeRef.RefreshDataAsync(); }
+    }
+
+    private async Task SetContainerTall()
+    {
+        containerHeight = "900px";
+        statusMessage = "Container 900px";
         if (useItemsProvider && virtualizeRef != null) { await virtualizeRef.RefreshDataAsync(); }
     }
 

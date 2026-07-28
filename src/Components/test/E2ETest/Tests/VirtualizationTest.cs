@@ -5974,6 +5974,55 @@ public class VirtualizationTest : ServerTestBase<ToggleExecutionModeServerFixtur
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void Virtualize_InitialIndex_ThenScrollToItem_WithProviderDelay_LandsOnFirstAttempt(bool variableHeight)
+    {
+        const int initialIndex = 10;
+        const int scrollTarget = 200;
+        Browser.MountTestComponent<VirtualizationAnchorMode>();
+        var container = Browser.Exists(By.Id("scroll-container"));
+        Browser.True(() => GetElementCount(container, ".item") > 0);
+
+        Browser.Exists(By.Id("toggle-provider")).Click();
+        Browser.True(() => GetElementCount(container, ".item") > 0);
+        Browser.Exists(By.Id("toggle-delay")).Click();
+        if (variableHeight)
+        {
+            Browser.Exists(By.Id("toggle-height")).Click();
+            Browser.True(() => GetElementCount(container, ".item") > 0);
+        }
+
+        Browser.Exists(By.Id("set-container-900")).Click();
+        Browser.True(() => container.Size.Height > 800);
+        var js = (IJavaScriptExecutor)Browser;
+
+        Browser.Exists(By.Id("unload-list")).Click();
+        Browser.Exists(By.Id("list-not-loaded"));
+        js.ExecuteScript("document.getElementById('scroll-container').scrollTop = 0;");
+        SetManualInitialIndex(initialIndex);
+        Browser.Exists(By.Id("reload-with-initial-index")).Click();
+
+        // Let the InitialItemIndex load fully settle at the initial position first.
+        Browser.True(() => GetTopRenderedIndex(js) == initialIndex);
+        Browser.True(() => ViewportBottomCoveredByRealItem(js),
+            $"Initial load should fill the viewport (top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
+
+        // The very first ScrollToItem after an InitialItemIndex load must land on the target.
+        SetScrollTargetIndex(scrollTarget);
+        Browser.Exists(By.Id("scroll-to-item")).Click();
+        WaitForScrollStatus($"Completed: {scrollTarget}");
+
+        Browser.True(() => GetTopRenderedIndex(js) == scrollTarget,
+            $"First ScrollToItem after InitialItemIndex load should land at {scrollTarget} but top was " +
+            $"{GetTopRenderedIndex(js)} (scrollTop={GetScrollTop(js, container)}). The viewport was reverted " +
+            $"toward the InitialItemIndex position because the initial viewport-fill loop was still active.");
+        Browser.True(() => ViewportBottomCoveredByRealItem(js),
+            $"Viewport bottom should be covered by a real item after ScrollToItem, but a gap/placeholder was " +
+            $"found (top={GetTopRenderedIndex(js)}, bottom={GetBottomRenderedIndex(js)}).");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void QuickGrid_InitialIndex_BeyondCount_ClampsToEnd(bool useItemsProvider)
     {
         MountQuickGridForScrollToItem(useItemsProvider);

@@ -61,14 +61,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     private TaskCompletionSource? _nextRenderTcs;
 
     private bool _initialScrollApplied;
-
-    private bool _hasSpacerFeedback;
-
-    private bool _fillViewportAfterScroll;
-    private bool _fillViewportContinue;
-    private int _fillViewportIterations;
-    private int _fillViewportLocalIndex;
-    private const int MaxFillViewportIterations = 30;
+    private bool _fillViewportExpected;
+    private bool _fillViewportReAlignPending;
 
     private bool _skipNextDistributionRefresh;
 
@@ -257,10 +251,10 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
                 $"Use the {nameof(InitialItemIndex)} parameter to set the initial scroll position.");
         }
 
-        return ScrollToItemAsyncCore(itemIndex, fillViewportAfterScroll: false, cancellationToken);
+        return ScrollToItemAsyncCore(itemIndex, runViewportFillLoop: false, cancellationToken);
     }
 
-    private async Task ScrollToItemAsyncCore(int itemIndex, bool fillViewportAfterScroll, CancellationToken cancellationToken)
+    private async Task ScrollToItemAsyncCore(int itemIndex, bool runViewportFillLoop, CancellationToken cancellationToken)
     {
         // Cancel-and-switch (last call wins); finally block guards cleanup by ref-equality.
         _currentScrollCts?.Cancel();
@@ -268,9 +262,9 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         var ourCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _currentScrollCts = ourCts;
         _inFlightScrollHasRendered = false;
-        _fillViewportAfterScroll = false;
-        _fillViewportContinue = false;
-        _fillViewportIterations = 0;
+        _fillViewportExpected = false;
+        _fillViewportReAlignPending = false;
+
         var token = ourCts.Token;
 
         // Suppress JS spacer-IO callbacks until alignToItem completes or a real user scrolls.
@@ -278,7 +272,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         {
             try
             {
-                await _jsInterop.BeginProgrammaticScrollAsync();
+                await _jsInterop.BeginProgrammaticScrollAsync(runViewportFillLoop);
             }
             catch (OperationCanceledException) { }
             catch (JSDisconnectedException) { }
@@ -289,7 +283,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             token.ThrowIfCancellationRequested();
             var refetchRequired = MoveWindowToContain(itemIndex);
             await EnsureRenderCommittedAsync(refetchRequired, token);
-            await AlignToTargetAsync(itemIndex, fillViewportAfterScroll, token);
+            await AlignToTargetAsync(itemIndex, runViewportFillLoop, token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -309,11 +303,9 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     private bool MoveWindowToContain(int itemIndex)
     {
         var clamped = ClampToItemRange(itemIndex);
-        var measured = _hasSpacerFeedback;
         var capacity = _visibleItemCapacity > 0 ? _visibleItemCapacity : OverscanCount * 2 + 1;
 
-        var leadingOverscan = measured ? OverscanCount : 0;
-        var desiredItemsBefore = Math.Max(0, clamped - leadingOverscan);
+        var desiredItemsBefore = Math.Max(0, clamped - OverscanCount);
         if (_itemCount > 0 && desiredItemsBefore + capacity > _itemCount)
         {
             desiredItemsBefore = Math.Max(0, _itemCount - capacity);
@@ -358,7 +350,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         token.ThrowIfCancellationRequested();
     }
 
-    private async ValueTask AlignToTargetAsync(int itemIndex, bool fillViewportAfterScroll, CancellationToken token)
+    private async ValueTask AlignToTargetAsync(int itemIndex, bool runViewportFillLoop, CancellationToken token)
     {
         // Re-clamp in case _itemCount shifted during the fetch.
         var localIndex = ClampToItemRange(itemIndex) - _itemsBefore;
@@ -371,8 +363,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // Pixel-exact one-shot scroll: JS reads getBoundingClientRect() and sets scrollTop.
         if (_jsInterop is not null)
         {
-            _fillViewportAfterScroll = fillViewportAfterScroll;
-            _fillViewportLocalIndex = localIndex;
+            _fillViewportExpected = runViewportFillLoop;
             await _jsInterop.AlignToItemAsync(localIndex, token);
         }
     }
@@ -525,7 +516,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             if (InitialItemIndex > 0)
             {
                 _initialScrollApplied = true;
-                await ScrollToItemAsyncCore(InitialItemIndex, fillViewportAfterScroll: true, CancellationToken.None);
+                await ScrollToItemAsyncCore(InitialItemIndex, runViewportFillLoop: true, CancellationToken.None);
             }
             else if (_itemCount > 0)
             {
@@ -533,19 +524,17 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             }
         }
 
-        if (_fillViewportContinue
+        if (_fillViewportReAlignPending
             && _jsInterop is not null
             && _loadedItemsStartIndex == _itemsBefore
             && _lastRenderedItemCount > 0
             && _lastRenderedPlaceholderCount == 0)
         {
-            _fillViewportContinue = false;
-            if (_fillViewportIterations < MaxFillViewportIterations)
-            {
-                _fillViewportIterations++;
-                _fillViewportAfterScroll = true;
-                await _jsInterop.AlignToItemAsync(_fillViewportLocalIndex);
-            }
+            _fillViewportReAlignPending = false;
+            _fillViewportExpected = true;
+
+            var fillLocalIndex = ClampToItemRange(InitialItemIndex) - _itemsBefore;
+            await _jsInterop.AlignToItemAsync(fillLocalIndex);
         }
     }
 
@@ -679,8 +668,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
         if (_currentScrollCts is null)
         {
-            _fillViewportContinue = false;
-            _fillViewportAfterScroll = false;
+            _fillViewportExpected = false;
+            _fillViewportReAlignPending = false;
             return false;
         }
         if (_inFlightScrollHasRendered)
@@ -692,28 +681,26 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // programmatic scroll and the in-flight provider call so the user's window wins.
         _currentScrollCts.Cancel();
         _currentScrollCts = null;
-        _fillViewportAfterScroll = false;
-        _fillViewportContinue = false;
+        _fillViewportExpected = false;
+        _fillViewportReAlignPending = false;
         _refreshCts?.Cancel();
         return false;
     }
 
     void IVirtualizeJsCallbacks.OnBeforeSpacerVisible(float spacerSize, float spacerSeparation, float containerSize)
     {
-        var fillAfterScroll = _fillViewportAfterScroll;
-        _fillViewportAfterScroll = false;
-        if (_pendingAnchorRestore || (!fillAfterScroll && ShouldSuppressSpacerCallback()))
+        var fillExpected = _fillViewportExpected;
+        _fillViewportExpected = false;
+        if (_pendingAnchorRestore || (!fillExpected && ShouldSuppressSpacerCallback()))
         {
             return;
         }
-
-        _hasSpacerFeedback = true;
 
         ProcessMeasurements(spacerSeparation);
 
         CalculateItemDistribution(spacerSize, spacerSeparation, containerSize, out var itemsBefore, out var visibleItemCapacity, out var unusedItemCapacity);
 
-        if (fillAfterScroll)
+        if (fillExpected)
         {
             var covered = _lastRenderedPlaceholderCount == 0 && spacerSeparation >= containerSize;
             if (!covered)
@@ -724,7 +711,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
                 {
                     _skipNextDistributionRefresh = false;
                     UpdateItemDistribution(_itemsBefore, grownCapacity, unusedItemCapacity);
-                    _fillViewportContinue = true;
+
+                    _fillViewportReAlignPending = true;
                 }
             }
             return;
@@ -745,8 +733,6 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         {
             return;
         }
-
-        _hasSpacerFeedback = true;
 
         var hadNewMeasurements = ProcessMeasurements(spacerSeparation);
 
