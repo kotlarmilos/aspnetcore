@@ -52,6 +52,10 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
     private bool CanDetectPrepend => _previousFirstLoadedItem is not null;
 
+    private bool RenderedContentIsMaterialized => _lastRenderedItemCount > 0 && _lastRenderedPlaceholderCount == 0;
+
+    private bool RenderedSliceIsSettled => _loadedItemsStartIndex == _itemsBefore && RenderedContentIsMaterialized;
+
     private CancellationTokenSource? _refreshCts;
 
     private CancellationTokenSource? _currentScrollCts;
@@ -61,8 +65,9 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     private TaskCompletionSource? _nextRenderTcs;
 
     private bool _initialScrollApplied;
-    private bool _fillViewportExpected;
-    private bool _fillViewportReAlignPending;
+
+    private enum ViewportFillPhase { None, AwaitingMeasure, AwaitingReAlign }
+    private ViewportFillPhase _viewportFill;
 
     private bool _skipNextDistributionRefresh;
 
@@ -262,8 +267,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         var ourCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _currentScrollCts = ourCts;
         _inFlightScrollHasRendered = false;
-        _fillViewportExpected = false;
-        _fillViewportReAlignPending = false;
+        _viewportFill = ViewportFillPhase.None;
 
         var token = ourCts.Token;
 
@@ -304,7 +308,6 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     {
         var clamped = ClampToItemRange(itemIndex);
         var capacity = _visibleItemCapacity > 0 ? _visibleItemCapacity : OverscanCount * 2 + 1;
-
         var desiredItemsBefore = Math.Max(0, clamped - OverscanCount);
         if (_itemCount > 0 && desiredItemsBefore + capacity > _itemCount)
         {
@@ -353,7 +356,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
     private async ValueTask AlignToTargetAsync(int itemIndex, bool runViewportFillLoop, CancellationToken token)
     {
         // Re-clamp in case _itemCount shifted during the fetch.
-        var localIndex = ClampToItemRange(itemIndex) - _itemsBefore;
+        var localIndex = LocalIndexOf(itemIndex);
         if (localIndex < 0 || localIndex >= _visibleItemCapacity || _lastRenderedItemCount == 0)
         {
             // Window doesn't contain the target (e.g., empty provider result) — bail cleanly.
@@ -363,7 +366,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // Pixel-exact one-shot scroll: JS reads getBoundingClientRect() and sets scrollTop.
         if (_jsInterop is not null)
         {
-            _fillViewportExpected = runViewportFillLoop;
+            _viewportFill = runViewportFillLoop ? ViewportFillPhase.AwaitingMeasure : ViewportFillPhase.None;
             await _jsInterop.AlignToItemAsync(localIndex, token);
         }
     }
@@ -384,6 +387,8 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         }
         return requested;
     }
+
+    private int LocalIndexOf(int itemIndex) => ClampToItemRange(itemIndex) - _itemsBefore;
 
     /// <inheritdoc />
     protected override void OnParametersSet()
@@ -524,16 +529,13 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
             }
         }
 
-        if (_fillViewportReAlignPending
+        if (_viewportFill == ViewportFillPhase.AwaitingReAlign
             && _jsInterop is not null
-            && _loadedItemsStartIndex == _itemsBefore
-            && _lastRenderedItemCount > 0
-            && _lastRenderedPlaceholderCount == 0)
+            && RenderedSliceIsSettled)
         {
-            _fillViewportReAlignPending = false;
-            _fillViewportExpected = true;
+            _viewportFill = ViewportFillPhase.AwaitingMeasure;
 
-            var fillLocalIndex = ClampToItemRange(InitialItemIndex) - _itemsBefore;
+            var fillLocalIndex = LocalIndexOf(InitialItemIndex);
             await _jsInterop.AlignToItemAsync(fillLocalIndex);
         }
     }
@@ -642,7 +644,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // feedback loop: subtracting (placeholderCount * _itemSize) makes the accumulated
         // measurements depend on _itemSize, which itself depends on those measurements.
         // Under CSS zoom, rounding errors in that loop compound and diverge from reality.
-        if (_lastRenderedItemCount <= 0 || _lastRenderedPlaceholderCount > 0)
+        if (!RenderedContentIsMaterialized)
         {
             return false;
         }
@@ -668,8 +670,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
         if (_currentScrollCts is null)
         {
-            _fillViewportExpected = false;
-            _fillViewportReAlignPending = false;
+            _viewportFill = ViewportFillPhase.None;
             return false;
         }
         if (_inFlightScrollHasRendered)
@@ -681,16 +682,15 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         // programmatic scroll and the in-flight provider call so the user's window wins.
         _currentScrollCts.Cancel();
         _currentScrollCts = null;
-        _fillViewportExpected = false;
-        _fillViewportReAlignPending = false;
+        _viewportFill = ViewportFillPhase.None;
         _refreshCts?.Cancel();
         return false;
     }
 
     void IVirtualizeJsCallbacks.OnBeforeSpacerVisible(float spacerSize, float spacerSeparation, float containerSize)
     {
-        var fillExpected = _fillViewportExpected;
-        _fillViewportExpected = false;
+        var fillExpected = _viewportFill == ViewportFillPhase.AwaitingMeasure;
+        _viewportFill = ViewportFillPhase.None;
         if (_pendingAnchorRestore || (!fillExpected && ShouldSuppressSpacerCallback()))
         {
             return;
@@ -702,19 +702,7 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
 
         if (fillExpected)
         {
-            var covered = _lastRenderedPlaceholderCount == 0 && spacerSeparation >= containerSize;
-            if (!covered)
-            {
-                var grownCapacity = Math.Max(visibleItemCapacity, _visibleItemCapacity + 1);
-                grownCapacity = Math.Min(grownCapacity, _itemCount - _itemsBefore);
-                if (grownCapacity > _visibleItemCapacity)
-                {
-                    _skipNextDistributionRefresh = false;
-                    UpdateItemDistribution(_itemsBefore, grownCapacity, unusedItemCapacity);
-
-                    _fillViewportReAlignPending = true;
-                }
-            }
+            RenderMoreItemsToFillViewport(spacerSeparation, containerSize, visibleItemCapacity, unusedItemCapacity);
             return;
         }
 
@@ -725,6 +713,25 @@ public sealed class Virtualize<TItem> : ComponentBase, IVirtualizeJsCallbacks, I
         }
 
         UpdateItemDistribution(itemsBefore, visibleItemCapacity, unusedItemCapacity);
+    }
+
+    private void RenderMoreItemsToFillViewport(float spacerSeparation, float containerSize, int visibleItemCapacity, int unusedItemCapacity)
+    {
+        var viewportCovered = _lastRenderedPlaceholderCount == 0 && spacerSeparation >= containerSize;
+        if (viewportCovered)
+        {
+            return;
+        }
+
+        var grownCapacity = Math.Min(Math.Max(visibleItemCapacity, _visibleItemCapacity + 1), _itemCount - _itemsBefore);
+        if (grownCapacity <= _visibleItemCapacity)
+        {
+            return;
+        }
+
+        _skipNextDistributionRefresh = false;
+        UpdateItemDistribution(_itemsBefore, grownCapacity, unusedItemCapacity);
+        _viewportFill = ViewportFillPhase.AwaitingReAlign;
     }
 
     void IVirtualizeJsCallbacks.OnAfterSpacerVisible(float spacerSize, float spacerSeparation, float containerSize)

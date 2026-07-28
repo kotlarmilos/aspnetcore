@@ -178,8 +178,25 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
 
   // After anchor restore, suppress spacer IO callbacks until the next user scroll.
   let suppressSpacerCallbacks = false;
-  let programmaticScrollInFlight = false;
-  let fillWanted = false;
+  const programmaticScroll = {
+    inProgress: false,
+    fillViewportAfterScroll: false,
+    begin(runViewportFillLoop: boolean): void {
+      suppressSpacerCallbacks = true;
+      this.inProgress = true;
+      this.fillViewportAfterScroll = runViewportFillLoop;
+      nativeAnchoring.suspend('programmatic');
+      pendingCallbacks.delete(spacerBefore);
+      pendingCallbacks.delete(spacerAfter);
+    },
+    end(): void {
+      if (!this.inProgress) {
+        return;
+      }
+      this.inProgress = false;
+      nativeAnchoring.resume('programmatic');
+    },
+  };
   let ignoreAnchorScroll = false;
   const isViewportAtBottom = (): boolean =>
     scrollElement.scrollHeight <= scrollElement.clientHeight
@@ -213,18 +230,6 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
     intersectionObserver.observe(spacerBefore);
     intersectionObserver.unobserve(spacerAfter);
     intersectionObserver.observe(spacerAfter);
-  }
-
-  // Called by C# at the start of a programmatic ScrollToIndex. Suppresses spacer-IO
-  // callbacks (which would otherwise be misinterpreted as a "user scroll") until
-  // either alignToItemAt completes or a real user scroll fires.
-  function beginProgrammaticScrollSuppression(runViewportFillLoop: boolean): void {
-    suppressSpacerCallbacks = true;
-    programmaticScrollInFlight = true;
-    fillWanted = runViewportFillLoop;
-    nativeAnchoring.suspend('programmatic');
-    pendingCallbacks.delete(spacerBefore);
-    pendingCallbacks.delete(spacerAfter);
   }
 
   function getObservedHeight(entry: ResizeObserverEntry): number {
@@ -532,10 +537,7 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
       reobserveSpacers();
     }
     // A genuine user scroll supersedes any in-flight programmatic scroll (user wins)
-    if (programmaticScrollInFlight) {
-      programmaticScrollInFlight = false;
-      nativeAnchoring.resume('programmatic');
-    }
+    programmaticScroll.end();
 
     // A user scroll is the only thing that (re)sets follow state (programmatic scrolls early-return above).
     if (anchorModeIs.end || bottomTracking.following) {
@@ -571,19 +573,23 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
     return el.getBoundingClientRect().top - containerTop;
   }
 
+  function measureSpacerSeparation(): { scaleFactor: number; spacerSeparation: number } {
+    const scaleFactor = getScaleFactor(spacerBefore, spacerAfter);
+    rangeBetweenSpacers.setStartAfter(spacerBefore);
+    rangeBetweenSpacers.setEndBefore(spacerAfter);
+    const spacerSeparation = rangeBetweenSpacers.getBoundingClientRect().height / scaleFactor;
+    return { scaleFactor, spacerSeparation };
+  }
+
   function dispatchBeforeSpacerFill(): void {
-    if (!fillWanted) {
+    if (!programmaticScroll.fillViewportAfterScroll) {
       return;
     }
     if (!spacerBefore.isConnected || !spacerAfter.isConnected) {
       return;
     }
     flushPendingStyleMutations();
-    const scaleFactor = getScaleFactor(spacerBefore, spacerAfter);
-
-    rangeBetweenSpacers.setStartAfter(spacerBefore);
-    rangeBetweenSpacers.setEndBefore(spacerAfter);
-    const spacerSeparation = rangeBetweenSpacers.getBoundingClientRect().height / scaleFactor;
+    const { scaleFactor, spacerSeparation } = measureSpacerSeparation();
 
     const containerSize = (scrollElement.clientHeight + 2 * rootMargin) / scaleFactor;
 
@@ -612,8 +618,7 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
       return;
     }
     pendingAlignLocalIndex = null;
-    programmaticScrollInFlight = false;
-    nativeAnchoring.resume('programmatic');
+    programmaticScroll.end();
     if (Math.abs(delta) > 0.5) {
       ignoreAnchorScroll = true;
       suppressSpacerCallbacks = true;
@@ -638,7 +643,7 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
     setAnchorMode: (mode: number) => { anchorMode = mode; bottomTracking.following = (mode & 2) !== 0; bottomTracking.reached = isViewportAtBottom(); },
     restoreAnchor: restoreAnchorForShift,
     alignToItem: alignToItemAt,
-    beginProgrammaticScroll: beginProgrammaticScrollSuppression,
+    beginProgrammaticScroll: (runViewportFillLoop: boolean) => programmaticScroll.begin(runViewportFillLoop),
     anchorSnapshot: null as { anchorItemIndex: number; anchorOffset: number; scrollTop: number } | null,
     onDispose: () => {
       mutationObserver.disconnect();
@@ -802,11 +807,7 @@ function init(dotNetHelper: DotNet.DotNetObject, spacerBefore: HTMLElement, spac
       return;
     }
 
-    const scaleFactor = getScaleFactor(spacerBefore, spacerAfter);
-
-    rangeBetweenSpacers.setStartAfter(spacerBefore);
-    rangeBetweenSpacers.setEndBefore(spacerAfter);
-    const spacerSeparation = rangeBetweenSpacers.getBoundingClientRect().height / scaleFactor;
+    const { scaleFactor, spacerSeparation } = measureSpacerSeparation();
 
     intersectingEntries.forEach((entry): void => {
       const containerSize = (entry.rootBounds?.height ?? 0) / scaleFactor;
