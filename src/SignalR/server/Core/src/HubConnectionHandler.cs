@@ -33,6 +33,7 @@ public class HubConnectionHandler<[DynamicallyAccessedMembers(Hub.DynamicallyAcc
     private readonly long? _maximumMessageSize;
     private readonly int _maxParallelInvokes;
     private readonly long _statefulReconnectBufferSize;
+    private readonly bool _allowUserIdentifierChangeOnAuthenticationRefresh;
 
     // Internal for testing
     internal TimeProvider TimeProvider { get; set; } = TimeProvider.System;
@@ -76,6 +77,7 @@ public class HubConnectionHandler<[DynamicallyAccessedMembers(Hub.DynamicallyAcc
             _maxParallelInvokes = _hubOptions.MaximumParallelInvocationsPerClient;
             disableImplicitFromServiceParameters = _hubOptions.DisableImplicitFromServicesParameters;
             _statefulReconnectBufferSize = _hubOptions.StatefulReconnectBufferSize;
+            _allowUserIdentifierChangeOnAuthenticationRefresh = _hubOptions.AllowUserIdentifierChangeOnAuthenticationRefresh;
 
             if (_hubOptions.HubFilters != null)
             {
@@ -89,6 +91,7 @@ public class HubConnectionHandler<[DynamicallyAccessedMembers(Hub.DynamicallyAcc
             _maxParallelInvokes = _globalHubOptions.MaximumParallelInvocationsPerClient;
             disableImplicitFromServiceParameters = _globalHubOptions.DisableImplicitFromServicesParameters;
             _statefulReconnectBufferSize = _globalHubOptions.StatefulReconnectBufferSize;
+            _allowUserIdentifierChangeOnAuthenticationRefresh = _globalHubOptions.AllowUserIdentifierChangeOnAuthenticationRefresh;
 
             if (_globalHubOptions.HubFilters != null)
             {
@@ -191,15 +194,24 @@ public class HubConnectionHandler<[DynamicallyAccessedMembers(Hub.DynamicallyAcc
         {
             // Recompute inside the lock so a concurrent refresh observes the latest principal and identifier.
             var newUserId = connection.GetUserIdentifier(user, _userIdProvider);
-            if (!string.Equals(newUserId, connection.UserIdentifier, StringComparison.Ordinal))
+            var previousUserId = connection.UserIdentifier;
+            var userIdentifierChanged = !string.Equals(newUserId, previousUserId, StringComparison.Ordinal);
+            if (userIdentifierChanged && !_allowUserIdentifierChangeOnAuthenticationRefresh)
             {
-                var previousUserId = connection.UserIdentifier;
                 Log.UserIdentifierChangedOnRefresh(_logger, previousUserId, newUserId);
                 connection.Abort();
                 return;
             }
 
+            // Apply the new identifier before re-keying. Connection teardown reads UserIdentifier to decide
+            // which user mapping to remove, and it runs concurrently with this method, so it has to observe
+            // the identifier the lifetime manager is keying on or the new mapping is never cleaned up.
             connection.ApplyUserState(user, newUserId);
+
+            if (userIdentifierChanged)
+            {
+                await _lifetimeManager.OnUserIdentifierChangedAsync(connection, previousUserId, newUserId);
+            }
         }
         catch (Exception ex)
         {

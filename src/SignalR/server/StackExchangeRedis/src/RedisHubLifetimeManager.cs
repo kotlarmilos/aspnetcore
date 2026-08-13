@@ -150,6 +150,27 @@ public class RedisHubLifetimeManager<THub> : HubLifetimeManager<THub>, IDisposab
     }
 
     /// <inheritdoc />
+    public override async Task OnUserIdentifierChangedAsync(
+        HubConnectionContext connection,
+        string? previousUserIdentifier,
+        string? newUserIdentifier)
+    {
+        await EnsureRedisServerConnection();
+
+        // Unsubscribe first so the connection is never subscribed to both user channels at once,
+        // which would deliver messages addressed to the previous user.
+        if (!string.IsNullOrEmpty(previousUserIdentifier))
+        {
+            await RemoveUserAsync(connection, previousUserIdentifier);
+        }
+
+        if (!string.IsNullOrEmpty(newUserIdentifier))
+        {
+            await SubscribeToUser(connection, newUserIdentifier);
+        }
+    }
+
+    /// <inheritdoc />
     public override Task SendAllAsync(string methodName, object?[] args, CancellationToken cancellationToken = default)
     {
         var message = _protocol.WriteInvocation(methodName, args);
