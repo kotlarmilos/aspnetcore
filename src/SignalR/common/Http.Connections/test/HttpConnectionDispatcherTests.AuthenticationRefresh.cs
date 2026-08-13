@@ -6,6 +6,7 @@ using System.Security.Claims;
 using System.Security.Principal;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Connections;
 using Microsoft.AspNetCore.Connections.Abstractions;
 using Microsoft.AspNetCore.Connections.Features;
@@ -133,6 +134,82 @@ public partial class HttpConnectionDispatcherTests
             Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
             var json = ReadJson(context.Response.Body);
             AssertRefreshError(json, "invalid_token");
+        }
+    }
+
+    [Fact]
+    public async Task RefreshUpdatesConnectionToAnonymousUser()
+    {
+        using (StartVerifiableLog())
+        {
+            var manager = CreateConnectionManager(LoggerFactory);
+            var dispatcher = CreateDispatcher(manager, LoggerFactory);
+            var options = new HttpConnectionDispatcherOptions { EnableAuthenticationRefresh = true };
+            var connection = manager.CreateConnection(options, negotiateVersion: 1);
+            connection.User = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.NameIdentifier, "user-1")],
+                "Test"));
+
+            var anonymousUser = new ClaimsPrincipal(new ClaimsIdentity());
+            var context = new DefaultHttpContext
+            {
+                User = anonymousUser,
+            };
+            context.Request.Path = "/foo/refresh";
+            context.Request.Method = "POST";
+            context.Response.Body = new MemoryStream();
+            context.Request.Query = new QueryCollection(new Dictionary<string, StringValues>
+            {
+                ["id"] = connection.ConnectionToken,
+            });
+            context.SetEndpoint(new Endpoint(
+                _ => Task.CompletedTask,
+                new EndpointMetadataCollection(),
+                "Anonymous refresh endpoint"));
+
+            await dispatcher.ExecuteRefreshAsync(context, options);
+
+            Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+            Assert.Same(anonymousUser, connection.User);
+            Assert.False(connection.User.Identity?.IsAuthenticated);
+        }
+    }
+
+    [Fact]
+    public async Task RefreshReturnsUnauthorizedWhenEndpointRequiresAuthorization()
+    {
+        using (StartVerifiableLog())
+        {
+            var manager = CreateConnectionManager(LoggerFactory);
+            var dispatcher = CreateDispatcher(manager, LoggerFactory);
+            var options = new HttpConnectionDispatcherOptions { EnableAuthenticationRefresh = true };
+            var connection = manager.CreateConnection(options, negotiateVersion: 1);
+            var originalUser = new ClaimsPrincipal(new ClaimsIdentity(
+                [new Claim(ClaimTypes.NameIdentifier, "user-1")],
+                "Test"));
+            connection.User = originalUser;
+
+            var context = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity()),
+            };
+            context.Request.Path = "/foo/refresh";
+            context.Request.Method = "POST";
+            context.Response.Body = new MemoryStream();
+            context.Request.Query = new QueryCollection(new Dictionary<string, StringValues>
+            {
+                ["id"] = connection.ConnectionToken,
+            });
+            context.SetEndpoint(new Endpoint(
+                _ => Task.CompletedTask,
+                new EndpointMetadataCollection(new AuthorizeAttribute()),
+                "Authorized refresh endpoint"));
+
+            await dispatcher.ExecuteRefreshAsync(context, options);
+
+            Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
+            AssertRefreshError(ReadJson(context.Response.Body), "invalid_token");
+            Assert.Same(originalUser, connection.User);
         }
     }
 
@@ -413,9 +490,8 @@ public partial class HttpConnectionDispatcherTests
                 ["id"] = connection.ConnectionToken,
             });
 
-            // No IAuthenticateResultFeature is present (no authorization middleware ran for the endpoint).
-            // /refresh relies on the middleware-produced result like the other endpoints and does not
-            // re-authenticate, so it cannot refresh and returns 401.
+            // No IAuthenticateResultFeature is present and the request was not routed, so /refresh has no
+            // endpoint metadata telling it the caller may be anonymous and returns 401.
             await dispatcher.ExecuteRefreshAsync(context, options);
 
             Assert.Equal(StatusCodes.Status401Unauthorized, context.Response.StatusCode);
