@@ -17,7 +17,7 @@ public sealed class Window : IAsyncDisposable
 
     internal Window(IJSRuntime jsRuntime)
     {
-        this._jsRuntime = jsRuntime;
+        _jsRuntime = jsRuntime;
     }
 
     /// <summary>
@@ -27,7 +27,7 @@ public sealed class Window : IAsyncDisposable
     /// <param name="factory">The callback that creates the projection.</param>
     /// <returns>The projection keyed by <typeparamref name="T"/>.</returns>
     internal T GetOrAddFeature<T>(Func<IJSRuntime, T> factory) where T : class
-        => this.GetOrAddFeatureCore<T>(subkey: null, factory);
+        => GetOrAddFeatureCore(subkey: null, factory);
 
     /// <summary>
     /// Gets the projection of type <typeparamref name="T"/> identified by <paramref name="subkey"/>,
@@ -45,24 +45,24 @@ public sealed class Window : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(subkey);
 
-        return this.GetOrAddFeatureCore<T>(subkey, factory);
+        return GetOrAddFeatureCore(subkey, factory);
     }
 
     private T GetOrAddFeatureCore<T>(string? subkey, Func<IJSRuntime, T> factory) where T : class
     {
         ArgumentNullException.ThrowIfNull(factory);
 
-        ObjectDisposedException.ThrowIf(this._disposed, this);
+        ObjectDisposedException.ThrowIf(_disposed, this);
 
         var key = (typeof(T), subkey);
 
-        if (this._features.TryGetValue(key, out var existing))
+        if (_features.TryGetValue(key, out var existing))
         {
             return (T)existing;
         }
 
-        var created = factory(this._jsRuntime);
-        this._features[key] = created;
+        var created = factory(_jsRuntime);
+        _features[key] = created;
 
         return created;
     }
@@ -70,14 +70,14 @@ public sealed class Window : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
-        if (this._disposed)
+        if (_disposed)
         {
             return;
         }
 
-        this._disposed = true;
-        var features = this._features.Values.ToArray();
-        this._features.Clear();
+        _disposed = true;
+        var features = _features.Values.ToArray();
+        _features.Clear();
 
         foreach (var feature in features)
         {
